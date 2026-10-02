@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
-# Zona horaria local oficial (Tabasco / Centro de México)
 ZONA_LOCAL = zoneinfo.ZoneInfo("America/Mexico_City")
 
 # ==========================================
@@ -44,7 +43,7 @@ TELEGRAM_BOT_TOKEN = cargar_secreto("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = cargar_secreto("TELEGRAM_CHAT_ID")
 
 # ==========================================
-# 2. CANAL DE TELEGRAM Y DICCIONARIO CLARO
+# 2. CANAL TELEGRAM Y DICCIONARIO CLARO
 # ==========================================
 DICCIONARIO_MODOS = {
     "TRACKING_LEAD_LAG": "Seguimiento Solar Activo",
@@ -70,7 +69,7 @@ def enviar_notificacion_telegram(mensaje: str):
         "parse_mode": "Markdown"
     }
     try:
-        requests.post(url, json=payload, timeout=3.5)
+        requests.post(url, json=payload, timeout=4.0)
     except Exception as e:
         print(f"[ALERTA TELEGRAM] Error enviando mensaje: {e}")
 
@@ -95,7 +94,7 @@ def arrancar_servidor_web():
 threading.Thread(target=arrancar_servidor_web, daemon=True).start()
 
 # ==========================================
-# 4. CONFIGURACIÓN Y ESQUEMAS
+# 4. CONFIGURACIÓN FIREBASE Y GEMINI
 # ==========================================
 FIREBASE_BASE = "https://jaguar-telemetry-default-rtdb.firebaseio.com"
 AUTH_PARAM = f"?auth={FIREBASE_SECRET}" if FIREBASE_SECRET else ""
@@ -194,7 +193,7 @@ def ejecutar_inferencia_jaguar(telemetria, pronostico):
         )
         return JaguarDecision.model_validate_json(resp.text)
     except Exception as e:
-        print(f"[ALERTA GEMINI] Failsafe por latencia o formato: {e}")
+        print(f"[ALERTA GEMINI] Failsafe activado: {e}")
         es_peligro = telemetria.get("viento_kmh", 0.0) >= 45.0 or pronostico.get("rafaga_proyectada_1h", 0.0) >= 38.0
         return JaguarDecision(
             modo_operativo="SAFETY_STOW" if es_peligro else "TRACKING_LEAD_LAG",
@@ -202,15 +201,97 @@ def ejecutar_inferencia_jaguar(telemetria, pronostico):
             intervalo_reposo_minutos=0 if es_peligro else 20,
             angulo_azimut_offset=0.0,
             angulo_elev_offset=0.0,
-            justificacion_tecnica="Resguardo preventivo activado automáticamente para proteger la estructura del seguidor." if es_peligro else "Operación nominal continua sin anomalías.",
+            justificacion_tecnica="Resguardo preventivo por ráfagas de viento detectadas." if es_peligro else "Operación nominal continua sin anomalías.",
             alerta_critica=es_peligro
         )
 
 # ==========================================
-# 5. BUCLE PRINCIPAL (TIEMPO REAL LOCAL)
+# 5. ATENCIÓN DE PREGUNTAS ABIERTAS (Q&A)
+# ==========================================
+def responder_pregunta_usuario(pregunta: str) -> str:
+    """Interpreta cualquier pregunta del operador (incluso con errores de dedo) usando Gemini."""
+    try:
+        r_tel = requests.get(URL_TELEMETRIA, timeout=2.5)
+        telemetria = r_tel.json() if r_tel.status_code == 200 and r_tel.json() else {}
+        
+        r_ctrl = requests.get(URL_CONTROL, timeout=2.5)
+        control = r_ctrl.json() if r_ctrl.status_code == 200 and r_ctrl.json() else {}
+
+        modo_actual = formatear_modo_legible(control.get("modo_ejecucion", "TRACKING"))
+
+        # Acceso directo por comando /
+        texto_cmd = pregunta.strip().lower()
+        if texto_cmd == "/estado":
+            return f"🛡️ *Estado:* {modo_actual}\n⚡ *Potencia:* {telemetria.get('potencia_w', 0.0)} W\n🔋 *Tensión:* {telemetria.get('voltaje', 0.0)} V\n💨 *Viento:* {telemetria.get('viento_kmh', 0.0)} km/h\n🌡️ *Temperatura:* {telemetria.get('temperatura', 25.0)} °C"
+        elif texto_cmd == "/potencia":
+            return f"⚡ *Generación Eléctrica:*\n- Potencia: {telemetria.get('potencia_w', 0.0)} W\n- Tensión de panel: {telemetria.get('voltaje', 0.0)} V\n- Corriente: {telemetria.get('corriente_ma', 0.0)} mA"
+        elif texto_cmd == "/clima":
+            return f"🌤️ *Condiciones Ambientales:*\n- Viento actual: {telemetria.get('viento_kmh', 0.0)} km/h\n- Estado pluvial: {telemetria.get('lluvia', 'Seco')}\n- Temp. silicio: {telemetria.get('temperatura', 25.0)} °C"
+        elif texto_cmd == "/modo":
+            rele_txt = "Energizados (En movimiento)" if control.get("rele_potencia_motores", True) else "Corte a 0V (Protección/Reposo)"
+            return f"⚙️ *Modo Operativo:* {modo_actual}\n🔌 *Motores:* {rele_txt}\n⏱️ *Reposo:* {control.get('intervalo_reposo_minutos', 20)} min"
+        elif texto_cmd == "/ayuda":
+            return "🤖 *Comandos disponibles:*\n/estado - Resumen general\n/potencia - Tensión y watts\n/clima - Sensores ambientales\n/modo - Estado de motores\n\n_O simplemente escríbeme cualquier duda con tus propias palabras._"
+
+        prompt_chat = f"""
+        Eres JAGUAR, el supervisor cognitivo del seguidor solar fotovoltaico JAGUAR KINETICS.
+        El operador te escribe por Telegram. Responde de forma clara, directa, educada y profesional.
+        Si la pregunta tiene faltas de ortografía o redacción informal, interpreta su significado real sin juzgarlo.
+
+        DATOS EN VIVO DEL SISTEMA:
+        - Modo actual: {modo_actual}
+        - Potencia del panel: {telemetria.get('potencia_w', 0.0)} W
+        - Tensión: {telemetria.get('voltaje', 0.0)} V
+        - Corriente: {telemetria.get('corriente_ma', 0.0)} mA
+        - Temperatura: {telemetria.get('temperatura', 25.0)} °C
+        - Viento en seguidor: {telemetria.get('viento_kmh', 0.0)} km/h
+        - Sensor pluvial: {telemetria.get('lluvia', 'Seco')}
+        - Estado del driver L298N: {'Energizado' if control.get('rele_potencia_motores', True) else 'Corte a 0V'}
+        - Diagnóstico vigente: {control.get('diagnostico_ia', 'Nominal')}
+
+        Consulta del usuario: "{pregunta}"
+        """
+        resp = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt_chat
+        )
+        return resp.text.strip()
+    except Exception as e:
+        return f"Disculpe, ocurrió una demora momentánea consultando los sensores: {e}"
+
+def hilo_escucha_telegram():
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    offset = 0
+    url_updates = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    
+    print("[TELEGRAM] Hilo de escucha para preguntas y comandos activo.")
+    while True:
+        try:
+            params = {"offset": offset, "timeout": 20}
+            r = requests.get(url_updates, params=params, timeout=25)
+            if r.status_code == 200:
+                data = r.json()
+                for update in data.get("result", []):
+                    offset = update["update_id"] + 1
+                    msg = update.get("message", {})
+                    chat_id = str(msg.get("chat", {}).get("id", ""))
+                    texto = msg.get("text", "").strip()
+
+                    if chat_id == str(TELEGRAM_CHAT_ID) and texto:
+                        print(f"[PREGUNTA RECIBIDA]: {texto}")
+                        respuesta = responder_pregunta_usuario(texto)
+                        enviar_notificacion_telegram(respuesta)
+        except Exception:
+            time.sleep(3)
+
+threading.Thread(target=hilo_escucha_telegram, daemon=True).start()
+
+# ==========================================
+# 6. BUCLE PRINCIPAL (TIEMPO REAL LOCAL)
 # ==========================================
 def ciclo_principal():
-    print("[INICIO] JAGUAR DAEMON activo con soporte horario local y términos claros...")
+    print("[INICIO] JAGUAR DAEMON 24/7 en ejecución...")
     ultimo_minuto_horario = -1
     alerta_critica_enviada = False
 
@@ -218,17 +299,17 @@ def ciclo_principal():
         try:
             ahora_local = datetime.now(ZONA_LOCAL)
 
-            # 1. Leer telemetría viva de Firebase RTDB
+            # 1. Leer telemetría viva
             r_tel = requests.get(URL_TELEMETRIA, timeout=3.0)
             telemetria = r_tel.json() if r_tel.status_code == 200 and r_tel.json() else {}
 
-            # 2. Consultar satélite Open-Meteo
+            # 2. Consultar satélite
             pronostico = obtener_pronostico_satelital()
 
-            # 3. Decisión con Gemini 2.5-Flash
+            # 3. Inferencia de decisión
             decision = ejecutar_inferencia_jaguar(telemetria, pronostico)
 
-            # 4. Despachar a Firebase /control.json
+            # 4. Despachar a /control.json
             payload = {
                 "modo_ejecucion": decision.modo_operativo,
                 "rele_potencia_motores": decision.rele_potencia,
@@ -241,7 +322,7 @@ def ciclo_principal():
             }
             requests.patch(URL_CONTROL, json=payload, timeout=3.0)
 
-            # 5. Notificación Horaria en Hora Local y Lenguaje Amigable
+            # 5. Notificación Horaria Automática
             minuto_actual = ahora_local.minute
             if minuto_actual == 0 and ultimo_minuto_horario != 0:
                 ultimo_minuto_horario = 0
@@ -259,7 +340,7 @@ def ciclo_principal():
             if minuto_actual != 0:
                 ultimo_minuto_horario = -1
 
-            # 6. Alerta Crítica (Anti-Duplicados)
+            # 6. Alerta de Seguridad (Anti-Duplicados)
             if decision.alerta_critica:
                 if not alerta_critica_enviada:
                     alerta_critica_enviada = True
