@@ -4,20 +4,22 @@ import time
 import requests
 import threading
 from datetime import datetime
+import zoneinfo
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
+# Zona horaria local oficial (Tabasco / Centro de México)
+ZONA_LOCAL = zoneinfo.ZoneInfo("America/Mexico_City")
+
 # ==========================================
-# 1. GESTOR SEGURO DE SECRETOS Y CREDENCIALES
+# 1. GESTOR SEGURO DE CREDENCIALES
 # ==========================================
 def cargar_secreto(clave: str, defecto: str = "") -> str:
-    """Busca la clave en variables de entorno (Render) o en .streamlit/secrets.toml (Local)."""
     val = os.environ.get(clave, "").strip()
     if val:
         return val
-    # Intento de lectura desde .streamlit/secrets.toml si existe localmente
     rutas = [".streamlit/secrets.toml", os.path.expanduser("~/.streamlit/secrets.toml")]
     for ruta in rutas:
         if os.path.exists(ruta):
@@ -42,10 +44,23 @@ TELEGRAM_BOT_TOKEN = cargar_secreto("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = cargar_secreto("TELEGRAM_CHAT_ID")
 
 # ==========================================
-# 2. CANAL DE NOTIFICACIONES PUSH (TELEGRAM API)
+# 2. CANAL DE TELEGRAM Y DICCIONARIO CLARO
 # ==========================================
+DICCIONARIO_MODOS = {
+    "TRACKING_LEAD_LAG": "Seguimiento Solar Activo",
+    "TRACKING": "Seguimiento Solar Activo",
+    "SAFETY_STOW": "Protección por Vendaval / Tormenta",
+    "RAIN_WASH": "Autolavado por Lluvia",
+    "THERMAL_DERATING": "Alivio por Sobrecalentamiento",
+    "CLOUDY_DIFFUSE": "Modo Cielo Nublado (Ahorro)",
+    "BATTERY_SAVER": "Ahorro de Energía (Batería)",
+    "STANDBY": "Pausa Manual / Mantenimiento"
+}
+
+def formatear_modo_legible(modo_raw: str) -> str:
+    return DICCIONARIO_MODOS.get(modo_raw, modo_raw)
+
 def enviar_notificacion_telegram(mensaje: str):
-    """Envía un mensaje de notificación formateado en Markdown a tu dispositivo."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -60,7 +75,7 @@ def enviar_notificacion_telegram(mensaje: str):
         print(f"[ALERTA TELEGRAM] Error enviando mensaje: {e}")
 
 # ==========================================
-# 3. SERVIDOR HTTP LIGERO (RENDER FREE KEEPALIVE)
+# 3. KEEPALIVE WEB (RENDER FREE)
 # ==========================================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -70,7 +85,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({"status": "ONLINE", "daemon": "JAGUAR KINETICS"}).encode('utf-8'))
 
     def log_message(self, format, *args):
-        return  # Silenciar registros HTTP del ping de cron-job.org
+        return
 
 def arrancar_servidor_web():
     puerto = int(os.environ.get("PORT", 8080))
@@ -80,7 +95,7 @@ def arrancar_servidor_web():
 threading.Thread(target=arrancar_servidor_web, daemon=True).start()
 
 # ==========================================
-# 4. ENDPOINTS Y CONFIGURACIÓN FIREBASE
+# 4. CONFIGURACIÓN Y ESQUEMAS
 # ==========================================
 FIREBASE_BASE = "https://jaguar-telemetry-default-rtdb.firebaseio.com"
 AUTH_PARAM = f"?auth={FIREBASE_SECRET}" if FIREBASE_SECRET else ""
@@ -90,9 +105,6 @@ URL_CONTROL    = f"{FIREBASE_BASE}/control.json{AUTH_PARAM}"
 
 client = genai.Client()
 
-# ==========================================
-# 5. ESQUEMA DE DECISIÓN COGNITIVA
-# ==========================================
 class JaguarDecision(BaseModel):
     modo_operativo: str = Field(
         description="Modo: TRACKING_LEAD_LAG, CLOUDY_DIFFUSE, SAFETY_STOW, RAIN_WASH, THERMAL_DERATING, BATTERY_SAVER o STANDBY"
@@ -110,15 +122,12 @@ class JaguarDecision(BaseModel):
         description="Offset cenital en grados (-15.0 a 35.0)"
     )
     justificacion_tecnica: str = Field(
-        description="Diagnóstico técnico de ingeniería"
+        description="Diagnóstico técnico comprensible y claro"
     )
     alerta_critica: bool = Field(
         description="True si se detecta peligro estructural o ráfagas extremas"
     )
 
-# ==========================================
-# 6. ENLACE METEOROLÓGICO SATELITAL (P.M.A)
-# ==========================================
 def obtener_pronostico_satelital():
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
@@ -160,20 +169,17 @@ def obtener_pronostico_satelital():
         "ghi_estimada": 650.0
     }
 
-# ==========================================
-# 7. INFERENCIA COGNITIVA JERÁRQUICA (HCSC)
-# ==========================================
 def ejecutar_inferencia_jaguar(telemetria, pronostico):
     prompt_sistema = """
     Eres JAGUAR, el supervisor cognitivo autónomo del seguidor biaxial JAGUAR KINETICS (panel 10W, área 0.046764 m2).
-    Aplica las políticas HCSC:
+    Aplica las políticas HCSC y explica la justificación de forma profesional pero comprensible para cualquier persona:
     1. SAFETY_STOW: Si anemómetro >= 45.0 km/h o ráfaga P.M.A 1h >= 35.0 km/h. Rele=False, reposo=0, az_off=viento_dir, el_off=15.0.
     2. RAIN_WASH: Si lluvia activa y viento < 28.0 km/h. Rele=True, el_off=35.0, reposo=30.
     3. THERMAL_DERATING: Si temp silicio >= 65.0°C y viento < 6.0 km/h. Rele=True, az_off=+6.0, reposo=15.
     4. CLOUDY_DIFFUSE: Si nubes >= 80% o potencia < 1.5W con luz. Rele=False, el_off=0.0, reposo=60.
     5. BATTERY_SAVER: Si potencia < 0.8W o tensión < 11.0V. Rele=False, reposo=30.
     6. TRACKING_LEAD_LAG: Nominal despejado. Rele=True, az_off=+2.5, reposo=20.
-    Responde estrictamente con un objeto JSON válido según el esquema indicado.
+    Responde estrictamente con un objeto JSON válido según el esquema.
     """
     try:
         resp = client.models.generate_content(
@@ -188,7 +194,7 @@ def ejecutar_inferencia_jaguar(telemetria, pronostico):
         )
         return JaguarDecision.model_validate_json(resp.text)
     except Exception as e:
-        print(f"[ALERTA GEMINI] Failsafe por latencia o error: {e}")
+        print(f"[ALERTA GEMINI] Failsafe por latencia o formato: {e}")
         es_peligro = telemetria.get("viento_kmh", 0.0) >= 45.0 or pronostico.get("rafaga_proyectada_1h", 0.0) >= 38.0
         return JaguarDecision(
             modo_operativo="SAFETY_STOW" if es_peligro else "TRACKING_LEAD_LAG",
@@ -196,25 +202,27 @@ def ejecutar_inferencia_jaguar(telemetria, pronostico):
             intervalo_reposo_minutos=0 if es_peligro else 20,
             angulo_azimut_offset=0.0,
             angulo_elev_offset=0.0,
-            justificacion_tecnica="Failsafe local activado automáticamente.",
+            justificacion_tecnica="Resguardo preventivo activado automáticamente para proteger la estructura del seguidor." if es_peligro else "Operación nominal continua sin anomalías.",
             alerta_critica=es_peligro
         )
 
 # ==========================================
-# 8. BUCLE DE CONTROL Y NOTIFICACIONES 24/7
+# 5. BUCLE PRINCIPAL (TIEMPO REAL LOCAL)
 # ==========================================
 def ciclo_principal():
-    print("[INICIO] JAGUAR DAEMON activo con notificaciones Telegram...")
+    print("[INICIO] JAGUAR DAEMON activo con soporte horario local y términos claros...")
     ultimo_minuto_horario = -1
     alerta_critica_enviada = False
 
     while True:
         try:
+            ahora_local = datetime.now(ZONA_LOCAL)
+
             # 1. Leer telemetría viva de Firebase RTDB
             r_tel = requests.get(URL_TELEMETRIA, timeout=3.0)
             telemetria = r_tel.json() if r_tel.status_code == 200 and r_tel.json() else {}
 
-            # 2. Consultar satélite
+            # 2. Consultar satélite Open-Meteo
             pronostico = obtener_pronostico_satelital()
 
             # 3. Decisión con Gemini 2.5-Flash
@@ -229,46 +237,45 @@ def ciclo_principal():
                 "intervalo_reposo_minutos": decision.intervalo_reposo_minutos,
                 "alerta_critica": decision.alerta_critica,
                 "diagnostico_ia": decision.justificacion_tecnica,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": ahora_local.isoformat()
             }
             requests.patch(URL_CONTROL, json=payload, timeout=3.0)
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Despacho: {decision.modo_operativo} | Relé: {decision.rele_potencia} | AzOff: {decision.angulo_azimut_offset}° | ElOff: {decision.angulo_elev_offset}°")
 
-            # 5. GESTIÓN DE NOTIFICACIONES PUSH (TELEGRAM)
-            minuto_actual = datetime.now().minute
-
-            # Disparo cada hora exacta (minuto :00)
+            # 5. Notificación Horaria en Hora Local y Lenguaje Amigable
+            minuto_actual = ahora_local.minute
             if minuto_actual == 0 and ultimo_minuto_horario != 0:
                 ultimo_minuto_horario = 0
+                modo_amigable = formatear_modo_legible(decision.modo_operativo)
                 msg_reporte = f"""⚡ *REPORTE HORARIO JAGUAR KINETICS*
-🕒 *Hora:* {datetime.now().strftime('%H:%M')}
-🛡️ *Modo:* `{decision.modo_operativo}`
-📊 *Potencia:* {telemetria.get('potencia_w', 0.0)} W
-🔋 *Tensión:* {telemetria.get('voltaje', 0.0)} V
-💨 *Viento:* {telemetria.get('viento_kmh', 0.0)} km/h
-🌡️ *Temp Silicio:* {telemetria.get('temperatura', 0.0)} °C
-🤖 *Diagnóstico:* {decision.justificacion_tecnica[:130]}..."""
+🕒 *Hora Local:* {ahora_local.strftime('%H:%M')} hrs
+🛡️ *Estado del Sistema:* {modo_amigable}
+📊 *Potencia Generada:* {telemetria.get('potencia_w', 0.0)} W
+🔋 *Tensión del Panel:* {telemetria.get('voltaje', 0.0)} V
+💨 *Velocidad del Viento:* {telemetria.get('viento_kmh', 0.0)} km/h
+🌡️ *Temperatura de Celdas:* {telemetria.get('temperatura', 0.0)} °C
+🤖 *Diagnóstico:* {decision.justificacion_tecnica}"""
                 enviar_notificacion_telegram(msg_reporte)
 
             if minuto_actual != 0:
                 ultimo_minuto_horario = -1
 
-            # Disparo inmediato ante Alerta Crítica (Vendaval o Peligro)
-            if decision.alerta_critica and not alerta_critica_enviada:
-                alerta_critica_enviada = True
-                msg_alerta = f"""🚨 *ALERTA CRÍTICA JAGUAR*
-⚠️ Modo activado: `{decision.modo_operativo}`
-💨 Viento registrado: {telemetria.get('viento_kmh', 0.0)} km/h
-🛰️ Ráfaga proyectada: {pronostico.get('rafaga_proyectada_1h', 0.0)} km/h
-🛑 Medida: Corte de energía en driver L298N a 0V y orientación de resguardo."""
-                enviar_notificacion_telegram(msg_alerta)
-            elif not decision.alerta_critica:
+            # 6. Alerta Crítica (Anti-Duplicados)
+            if decision.alerta_critica:
+                if not alerta_critica_enviada:
+                    alerta_critica_enviada = True
+                    modo_amigable = formatear_modo_legible(decision.modo_operativo)
+                    msg_alerta = f"""🚨 *ALERTA DE SEGURIDAD JAGUAR*
+⚠️️ *Acción:* {modo_amigable}
+💨 *Viento en el Seguidor:* {telemetria.get('viento_kmh', 0.0)} km/h
+🛰️ *Ráfaga Pronosticada:* {pronostico.get('rafaga_proyectada_1h', 0.0)} km/h
+🛑 *Medida:* Motores desconectados a 0V y panel colocado en posición horizontal de resguardo para proteger la estructura."""
+                    enviar_notificacion_telegram(msg_alerta)
+            else:
                 alerta_critica_enviada = False
 
         except Exception as err:
             print(f"[ERROR BUCLE] {err}")
 
-        # Evaluación cada 60 segundos
         time.sleep(60)
 
 if __name__ == "__main__":
