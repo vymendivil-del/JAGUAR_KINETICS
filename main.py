@@ -1,14 +1,37 @@
 import os
 import json
+import time
 import requests
+import threading
 from datetime import datetime
-import functions_framework
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
 # ==========================================
-# ENDPOINTS Y CONFIGURACIÓN
+# 1. SERVIDOR HTTP LIGERO (RENDER FREE KEEPALIVE)
+# ==========================================
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({"status": "ONLINE", "daemon": "JAGUAR KINETICS"}).encode('utf-8'))
+
+    def log_message(self, format, *args):
+        return  # Silenciar registros HTTP en la consola
+
+def arrancar_servidor_web():
+    puerto = int(os.environ.get("PORT", 8080))
+    servidor = HTTPServer(('0.0.0.0', puerto), HealthHandler)
+    servidor.serve_forever()
+
+# Iniciar el servidor web en un hilo secundario
+threading.Thread(target=arrancar_servidor_web, daemon=True).start()
+
+# ==========================================
+# 2. ENDPOINTS Y CONFIGURACIÓN
 # ==========================================
 FIREBASE_BASE = "https://jaguar-telemetry-default-rtdb.firebaseio.com"
 FIREBASE_SECRET = os.environ.get("FIREBASE_DATABASE_SECRET", "")
@@ -17,11 +40,11 @@ AUTH_PARAM = f"?auth={FIREBASE_SECRET}" if FIREBASE_SECRET else ""
 URL_TELEMETRIA = f"{FIREBASE_BASE}/telemetria.json{AUTH_PARAM}"
 URL_CONTROL    = f"{FIREBASE_BASE}/control.json{AUTH_PARAM}"
 
-# Inicialización del cliente de Gemini (usa GEMINI_API_KEY del entorno de Cloud Functions)
+# Inicialización del cliente de Gemini
 client = genai.Client()
 
 # ==========================================
-# ESQUEMA DE DECISIÓN COGNITIVA
+# 3. ESQUEMA DE DECISIÓN COGNITIVA
 # ==========================================
 class JaguarDecision(BaseModel):
     modo_operativo: str = Field(
@@ -47,7 +70,7 @@ class JaguarDecision(BaseModel):
     )
 
 # ==========================================
-# ENLACE METEOROLÓGICO SATELITAL (P.M.A)
+# 4. ENLACE METEOROLÓGICO SATELITAL (P.M.A)
 # ==========================================
 def obtener_pronostico_satelital():
     url = "https://api.open-meteo.com/v1/forecast"
@@ -91,7 +114,7 @@ def obtener_pronostico_satelital():
     }
 
 # ==========================================
-# INFERENCIA COGNITIVA JERÁRQUICA (HCSC)
+# 5. INFERENCIA COGNITIVA JERÁRQUICA (HCSC)
 # ==========================================
 def ejecutar_inferencia_jaguar(telemetria, pronostico):
     prompt_sistema = """
@@ -117,7 +140,8 @@ def ejecutar_inferencia_jaguar(telemetria, pronostico):
             )
         )
         return JaguarDecision.model_validate_json(resp.text)
-    except Exception:
+    except Exception as e:
+        print(f"[ALERTA GEMINI] Failsafe activado por error: {e}")
         es_peligro = telemetria.get("viento_kmh", 0.0) >= 45.0 or pronostico.get("rafaga_proyectada_1h", 0.0) >= 38.0
         return JaguarDecision(
             modo_operativo="SAFETY_STOW" if es_peligro else "TRACKING_LEAD_LAG",
@@ -125,39 +149,45 @@ def ejecutar_inferencia_jaguar(telemetria, pronostico):
             intervalo_reposo_minutos=0 if es_peligro else 20,
             angulo_azimut_offset=0.0,
             angulo_elev_offset=0.0,
-            justificacion_tecnica="Failsafe ejecutado automáticamente ante desconexión de red o latencia.",
+            justificacion_tecnica="Failsafe ejecutado automáticamente ante latencia o desconexión.",
             alerta_critica=es_peligro
         )
 
 # ==========================================
-# PUNTO DE ENTRADA HTTP (CLOUD FUNCTION)
+# 6. BUCLE CONTINUO DE SUPERVISIÓN 24/7
 # ==========================================
-@functions_framework.http
-def ejecutar_supervision_jaguar(request):
-    try:
-        # 1. Leer telemetría viva de Firebase RTDB
-        r_tel = requests.get(URL_TELEMETRIA, timeout=2.5)
-        telemetria = r_tel.json() if r_tel.status_code == 200 and r_tel.json() else {}
+def ciclo_principal():
+    print("[INICIO] Daemon de supervisión JAGUAR KINETICS en ejecución continua...")
+    while True:
+        try:
+            # 1. Leer telemetría viva de Firebase RTDB
+            r_tel = requests.get(URL_TELEMETRIA, timeout=3.0)
+            telemetria = r_tel.json() if r_tel.status_code == 200 and r_tel.json() else {}
 
-        # 2. Consultar satélite Open-Meteo
-        pronostico = obtener_pronostico_satelital()
+            # 2. Consultar Open-Meteo
+            pronostico = obtener_pronostico_satelital()
 
-        # 3. Inferencia cognitiva con Gemini 2.5-Flash
-        decision = ejecutar_inferencia_jaguar(telemetria, pronostico)
+            # 3. Inferencia con Gemini 2.5-Flash
+            decision = ejecutar_inferencia_jaguar(telemetria, pronostico)
 
-        # 4. Escribir decisión en /control.json para el ESP32
-        payload = {
-            "modo_ejecucion": decision.modo_operativo,
-            "rele_potencia_motores": decision.rele_potencia,
-            "offset_azimut": decision.angulo_azimut_offset,
-            "offset_elevacion": decision.angulo_elev_offset,
-            "intervalo_reposo_minutos": decision.intervalo_reposo_minutos,
-            "alerta_critica": decision.alerta_critica,
-            "diagnostico_ia": decision.justificacion_tecnica,
-            "timestamp": datetime.now().isoformat()
-        }
-        requests.patch(URL_CONTROL, json=payload, timeout=2.5)
+            # 4. Despachar a /control.json
+            payload = {
+                "modo_ejecucion": decision.modo_operativo,
+                "rele_potencia_motores": decision.rele_potencia,
+                "offset_azimut": decision.angulo_azimut_offset,
+                "offset_elevacion": decision.angulo_elev_offset,
+                "intervalo_reposo_minutos": decision.intervalo_reposo_minutos,
+                "alerta_critica": decision.alerta_critica,
+                "diagnostico_ia": decision.justificacion_tecnica,
+                "timestamp": datetime.now().isoformat()
+            }
+            r_patch = requests.patch(URL_CONTROL, json=payload, timeout=3.0)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Despacho: {decision.modo_operativo} | Relé: {decision.rele_potencia} | AzOff: {decision.angulo_azimut_offset}° | ElOff: {decision.angulo_elev_offset}°")
+        except Exception as err:
+            print(f"[ERROR BUCLE] {err}")
 
-        return (json.dumps({"estado": "OK", "modo": decision.modo_operativo}), 200, {"Content-Type": "application/json"})
-    except Exception as e:
-        return (json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"})
+        # Pausa de 60 segundos entre cada evaluación cognitiva
+        time.sleep(60)
+
+if __name__ == "__main__":
+    ciclo_principal()
