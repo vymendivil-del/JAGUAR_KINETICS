@@ -1,0 +1,7 @@
+Fecha,Dia,Condicion_Climatica,Fijo_18deg_Wh,Seguidor_1Eje_Wh,JAGUAR_HCSC_Biaxial_Wh,Ganancia_Neta_Pct,Viento_Max_kmh,Temp_Max_C
+2026-10-08,Jueves,Nublado Variable,51.2,47.8,57.6,12.5,19.5,38.2
+2026-10-09,Viernes,Viento y Lluvia Dispersa,44.5,41.2,49.8,11.9,46.2,36.8
+2026-10-10,Sabado,Soleado Optimo,64.4,60.2,72.3,12.3,16.8,42.6
+2026-10-11,Domingo,Parcialmente Nublado,59.8,56.0,67.1,12.2,18.0,40.5
+2026-10-12,Lunes,Cielo Difuso,48.6,45.4,54.7,12.6,22.4,37.4
+TOTAL,5 Dias,Periodo Consolidado,268.5,250.6,301.5,12.3,46.2,42.6
