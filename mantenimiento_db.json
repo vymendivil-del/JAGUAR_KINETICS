@@ -1,0 +1,29 @@
+[
+  {
+    "OT": "OT-2026-08-15",
+    "Fecha": "2026-08-15",
+    "Tipo": "Puesta en Marcha",
+    "Técnico": "Christian Garric",
+    "Estado": "Conforme",
+    "Paro": "No",
+    "Observaciones": "Calibración inicial de protección de carrera en pin D3 y termopozo DS18B20."
+  },
+  {
+    "OT": "OT-2026-08-25",
+    "Fecha": "2026-08-25",
+    "Tipo": "Preventivo Menor",
+    "Técnico": "Christian Garric",
+    "Estado": "Conforme",
+    "Paro": "No",
+    "Observaciones": "Inspección de bornes en driver L298N y verificación de bus I2C INA219."
+  },
+  {
+    "OT": "OT-2026-09-18",
+    "Fecha": "2026-09-18",
+    "Tipo": "Reacondicionamiento",
+    "Técnico": "Christian Garric",
+    "Estado": "Conforme",
+    "Paro": "No",
+    "Observaciones": "Ponchado de conectores MC4, ensamble de miniskid y verificación de corte de sobrecarrera superior."
+  }
+]
