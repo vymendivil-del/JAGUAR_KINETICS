@@ -41,7 +41,7 @@ if GEMINI_KEY:
 TELEGRAM_BOT_TOKEN = cargar_secreto("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = cargar_secreto("TELEGRAM_CHAT_ID")
 
-SUPABASE_URL = "https://uepycvoyvvdejebribu.supabase.co"
+SUPABASE_URL = "https://uepycvoyvvdejebrlbuv.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVlcHljdm95dnZkZWplYnJsYnV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1MTI4MTgsImV4cCI6MjEwNzA4ODgxOH0.pkeFwkGrXQ9WylCIForlYcD4386hn46jMBH988byAcI"
 
 HEADERS_SB = {
