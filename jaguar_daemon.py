@@ -41,8 +41,9 @@ if GEMINI_KEY:
 TELEGRAM_BOT_TOKEN = cargar_secreto("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = cargar_secreto("TELEGRAM_CHAT_ID")
 
-SUPABASE_URL = "https://uepycvoyvvdejebrlbuv.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVlcHljdm95dnZkZWplYnJsYnV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1MTI4MTgsImV4cCI6MjEwNzA4ODgxOH0.pkeFwkGrXQ9WylCIForlYcD4386hn46jMBH988byAcI"
+# URL homologada oficial de Supabase
+SUPABASE_URL = cargar_secreto("SUPABASE_URL", "https://uepycvoyvvdejebrlbuv.supabase.co")
+SUPABASE_KEY = cargar_secreto("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVlcHljdm95dnZkZWplYnJsYnV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1MTI4MTgsImV4cCI6MjEwNzA4ODgxOH0.pkeFwkGrXQ9WylCIForlYcD4386hn46jMBH988byAcI")
 
 HEADERS_SB = {
     "apikey": SUPABASE_KEY,
@@ -55,7 +56,7 @@ URL_SB_TEL = f"{SUPABASE_URL}/rest/v1/telemetria?id=eq.1"
 URL_SB_CMD = f"{SUPABASE_URL}/rest/v1/control?id=eq.1"
 
 # ==========================================
-# 2. CANAL DE TELEGRAM Y NOTIFICACIONES
+# 2. MAPA DE TÉRMINOS OPERATIVOS
 # ==========================================
 DICCIONARIO_MODOS = {
     "TRACKING_LEAD_LAG": "Seguimiento Solar Activo",
@@ -63,8 +64,8 @@ DICCIONARIO_MODOS = {
     "SAFETY_STOW": "Protección por Vendaval / Tormenta",
     "RAIN_WASH": "Autolavado por Lluvia",
     "THERMAL_DERATING": "Alivio por Sobrecalentamiento",
-    "CLOUDY_DIFFUSE": "Modo Cielo Nublado (Ahorro)",
-    "BATTERY_SAVER": "Ahorro de Energía (Batería)",
+    "CLOUDY_DIFFUSE": "Cielo Nublado (Ahorro)",
+    "BATTERY_SAVER": "Ahorro de Energía",
     "STANDBY": "Pausa Manual / Mantenimiento"
 }
 
@@ -86,14 +87,265 @@ def enviar_notificacion_telegram(mensaje: str):
         print(f"[ALERTA TELEGRAM] Error enviando mensaje: {e}")
 
 # ==========================================
-# 3. SERVIDOR HTTP PUENTE (RENDER -> SUPABASE)
+# 3. GENERADOR DE CONSOLA WEB HTML (RENDER)
+# ==========================================
+def construir_dashboard_html():
+    # Consulta de telemetría y directivas vigentes
+    tel = {}
+    ctrl = {}
+    try:
+        r_t = requests.get(URL_SB_TEL, headers=HEADERS_SB, timeout=2.0)
+        if r_t.status_code == 200 and r_t.json():
+            tel = r_t.json()[0]
+    except Exception:
+        pass
+
+    try:
+        r_c = requests.get(URL_SB_CMD, headers=HEADERS_SB, timeout=2.0)
+        if r_c.status_code == 200 and r_c.json():
+            ctrl = r_c.json()[0]
+    except Exception:
+        pass
+
+    v = tel.get("voltaje", 0.0)
+    i = tel.get("corriente_ma", 0.0)
+    p = tel.get("potencia_w", 0.0)
+    temp = tel.get("temperatura", 25.0)
+    viento = tel.get("viento_kmh", 0.0)
+    lluvia = tel.get("lluvia", "Seco")
+    azimut = tel.get("azimut", 90.0)
+    elevacion = tel.get("elevacion", 15.0)
+    timestamp_tel = tel.get("actualizado_en", tel.get("timestamp", "Sin registro reciente"))
+
+    modo = formatear_modo_legible(ctrl.get("modo_ejecucion", "TRACKING_LEAD_LAG"))
+    motores_on = ctrl.get("rele_potencia_motores", True)
+    reposo = ctrl.get("intervalo_reposo_minutos", 20)
+    diagnostico = ctrl.get("diagnostico_ia", "Supervisión cognitiva activa 24/7.")
+
+    estado_badge = '<span class="badge badge-green">DISPONIBLE</span>' if motores_on else '<span class="badge badge-red">CORTE 0V</span>'
+    estado_esp = '<span class="badge badge-green">CONECTADO</span>' if v > 0 or p > 0 else '<span class="badge badge-cyan">EN ESPERA</span>'
+
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JAGUAR KINETICS | Consola Operativa 24/7</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@800;900&family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <meta http-equiv="refresh" content="15">
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            background-color: #0B0C10;
+            color: #F8FAFC;
+            font-family: 'Inter', sans-serif;
+            padding: 20px;
+            min-height: 100vh;
+        }}
+        .header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #1E232E;
+            padding-bottom: 15px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }}
+        .title {{
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 900;
+            letter-spacing: 2px;
+            background: linear-gradient(90deg, #FFFFFF 10%, #E02424 70%, #8B0000 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+        .subtitle {{
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.85rem;
+            color: #94A3B8;
+        }}
+        .grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 16px;
+            margin-bottom: 25px;
+        }}
+        .card {{
+            background-color: #0E1015;
+            border: 1px solid #1A1D24;
+            border-radius: 12px;
+            padding: 16px 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+        }}
+        .card-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #1A1D24;
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+            font-weight: 700;
+            font-size: 0.95rem;
+        }}
+        .badge {{
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 12px;
+        }}
+        .badge-green {{ background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.4); }}
+        .badge-red {{ background: rgba(239, 68, 68, 0.15); color: #EF4444; border: 1px solid rgba(239, 68, 68, 0.4); }}
+        .badge-cyan {{ background: rgba(6, 182, 212, 0.15); color: #06B6D4; border: 1px solid rgba(6, 182, 212, 0.4); }}
+        .row {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 8px 0;
+            font-size: 0.85rem;
+        }}
+        .label {{ color: #8F9CAE; }}
+        .val {{ font-family: 'Share Tech Mono', monospace; font-weight: bold; color: #FFFFFF; font-size: 1rem; }}
+        .val-highlight {{ color: #10B981; font-size: 1.15rem; }}
+        .diag-box {{
+            background-color: #0E1015;
+            border: 1px solid #8B0000;
+            border-radius: 10px;
+            padding: 15px 20px;
+            margin-bottom: 25px;
+        }}
+        .diag-title {{
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.85rem;
+            color: #E02424;
+            margin-bottom: 6px;
+        }}
+        .diag-text {{
+            font-size: 0.9rem;
+            color: #CBD5E1;
+            line-height: 1.4;
+        }}
+        .footer-links {{
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }}
+        .btn {{
+            display: inline-block;
+            background: #1E232E;
+            color: #FFFFFF;
+            text-decoration: none;
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            border: 1px solid #334155;
+            transition: all 0.2s ease;
+        }}
+        .btn:hover {{
+            background: #8B0000;
+            border-color: #DC2626;
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <div class="title">JAGUAR KINETICS</div>
+            <div class="subtitle">Consola de Supervisión Ciberfísica 24/7 (Cloud HCSC)</div>
+        </div>
+        <div class="subtitle">
+            🕒 Hora Local: {datetime.now(ZONA_LOCAL).strftime('%H:%M:%S')} | Cárdenas, Tabasco
+        </div>
+    </div>
+
+    <div class="grid">
+        <!-- Tarjeta JAGUAR IA -->
+        <div class="card">
+            <div class="card-header">
+                <span>🧠 JAGUAR (Supervisor)</span>
+                {estado_badge}
+            </div>
+            <div class="row"><span class="label">Política Activa:</span><span class="val">{modo}</span></div>
+            <div class="row"><span class="label">Driver L298N:</span><span class="val">{'Energizado' if motores_on else 'Corte 0V'}</span></div>
+            <div class="row"><span class="label">Banda Muerta:</span><span class="val">{reposo} min reposo</span></div>
+        </div>
+
+        <!-- Tarjeta Generación Eléctrica -->
+        <div class="card">
+            <div class="card-header">
+                <span>⚡ Módulo Epcom 10W</span>
+                <span class="badge badge-green">MÉTRICAS</span>
+            </div>
+            <div class="row"><span class="label">Potencia Generada:</span><span class="val val-highlight">{p:.2f} W</span></div>
+            <div class="row"><span class="label">Voltaje del Panel:</span><span class="val">{v:.2f} V</span></div>
+            <div class="row"><span class="label">Corriente Neta:</span><span class="val">{i:.1f} mA</span></div>
+        </div>
+
+        <!-- Tarjeta Hardware / Cinemática -->
+        <div class="card">
+            <div class="card-header">
+                <span>🛰️ Enlace Hardware</span>
+                {estado_esp}
+            </div>
+            <div class="row"><span class="label">Coordenada Azimut:</span><span class="val">{azimut:.1f}°</span></div>
+            <div class="row"><span class="label">Coordenada Elevación:</span><span class="val">{elevacion:.1f}°</span></div>
+            <div class="row"><span class="label">Tope Carrera D3:</span><span class="val">Protegido (&lt;4µs)</span></div>
+        </div>
+
+        <!-- Tarjeta Meteorología -->
+        <div class="card">
+            <div class="card-header">
+                <span>🌦️ E.M.A / P.M.A</span>
+                <span class="badge badge-cyan">ESTABLE</span>
+            </div>
+            <div class="row"><span class="label">Velocidad Viento:</span><span class="val">{viento:.1f} km/h</span></div>
+            <div class="row"><span class="label">Temperatura Celda:</span><span class="val">{temp:.1f} °C</span></div>
+            <div class="row"><span class="label">Condición Pluvial:</span><span class="val">{lluvia}</span></div>
+        </div>
+    </div>
+
+    <div class="diag-box">
+        <div class="diag-title">⚡ DIAGNÓSTICO COGNITIVO EN TIEMPO REAL (GEMINI 2.5 FLASH)</div>
+        <div class="diag-text">{diagnostico}</div>
+    </div>
+
+    <div class="footer-links">
+        <a href="https://github.com/vymendivil-del/JAGUAR_KINETICS" target="_blank" class="btn">📂 Repositorio Oficial GitHub</a>
+        <a href="https://t.me/" target="_blank" class="btn">🤖 Bot de Telegram JAGUAR</a>
+        <a href="/api/telemetria" class="btn">🔌 API JSON Cruda</a>
+    </div>
+</body>
+</html>"""
+    return html
+
+# ==========================================
+# 4. SERVIDOR HTTP DUAL (DASHBOARD + PUENTE)
 # ==========================================
 class BridgeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps({"status": "ONLINE", "daemon": "JAGUAR KINETICS PUENTE"}).encode('utf-8'))
+        if self.path in ['/', '/index.html', '/dashboard']:
+            contenido_html = construir_dashboard_html()
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(contenido_html.encode('utf-8'))
+        elif self.path in ['/api/telemetria', '/status']:
+            try:
+                r_sb = requests.get(URL_SB_TEL, headers=HEADERS_SB, timeout=2.0)
+                datos = r_sb.json() if r_sb.status_code == 200 else {"status": "error"}
+            except Exception:
+                datos = {"status": "error_conexion"}
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(datos).encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def do_POST(self):
         if self.path == '/telemetria_esp32':
@@ -108,7 +360,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "OK", "supabase_code": r_sb.status_code}).encode('utf-8'))
-                print(f"[PUENTE ESP32] Datos recibidos y despachados a Supabase -> Código: {r_sb.status_code}")
+                print(f"[PUENTE ESP32] Telemetría recibida y despachada a Supabase -> Código: {r_sb.status_code}")
             except Exception as err:
                 self.send_response(500)
                 self.end_headers()
@@ -118,7 +370,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def log_message(self, format, *args):
-        return  # Silenciar pings rutinarios de cron-job
+        return  # Silenciar pings periódicos de monitoreo
 
 def arrancar_servidor_web():
     puerto = int(os.environ.get("PORT", 8080))
@@ -128,7 +380,7 @@ def arrancar_servidor_web():
 threading.Thread(target=arrancar_servidor_web, daemon=True).start()
 
 # ==========================================
-# 4. CONFIGURACIÓN GEMINI Y SUPERVISIÓN
+# 5. CONFIGURACIÓN GEMINI Y SUPERVISIÓN
 # ==========================================
 client = genai.Client()
 
@@ -205,7 +457,7 @@ def ejecutar_inferencia_jaguar(telemetria, pronostico):
         )
 
 # ==========================================
-# 5. ATENCIÓN DE PREGUNTAS (TELEGRAM Q&A)
+# 6. ATENCIÓN DE PREGUNTAS (TELEGRAM Q&A)
 # ==========================================
 def responder_pregunta_usuario(pregunta: str) -> str:
     try:
@@ -268,10 +520,10 @@ def hilo_escucha_telegram():
 threading.Thread(target=hilo_escucha_telegram, daemon=True).start()
 
 # ==========================================
-# 6. BUCLE PRINCIPAL DE SUPERVISIÓN 24/7
+# 7. BUCLE PRINCIPAL DE SUPERVISIÓN 24/7
 # ==========================================
 def ciclo_principal():
-    print("[INICIO] JAGUAR DAEMON 24/7 activo con soporte de puente HTTP...")
+    print("[INICIO] JAGUAR DAEMON 24/7 activo con Dashboard Web y Puente HTTP...")
     ultimo_minuto_horario = -1
     alerta_critica_enviada = False
 
